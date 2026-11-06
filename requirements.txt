@@ -1,0 +1,7 @@
+fastapi uvicorn
+langgraph langchain langchain-google-genai
+google-genai python-dotenv
+sqlalchemy psycopg[binary]
+pydantic httpx
+chromadb
+pypdf
