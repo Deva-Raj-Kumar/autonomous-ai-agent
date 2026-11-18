@@ -1,0 +1,53 @@
+[project]
+name = "autonomous-ai-agent"
+version = "0.1.0"
+description = "A personal autonomous AI agent built with FastAPI, LangGraph and RAG."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]   # lets tests `import app` without installing the project
+addopts = "-ra"      # print a short summary of skipped/failed tests at the end
+markers = [
+    "live: calls the real LLM API (needs RUN_LIVE_TESTS=1 and an API key)",
+    "mysql: uses your MySQL server via a scratch database (needs RUN_MYSQL_TESTS=1)",
+    "real_auth: do NOT auto-login; the test exercises real tokens",
+    "integration: full-stack user journeys (tests/integration, added automatically)",
+    "security: access control, fuzzing, property tests (tests/security, added automatically)",
+    "perf: query counts, query plans, latency budgets (tests/performance, added automatically)",
+]
+filterwarnings = [
+    # Third-party (langsmith pytest plugin) warning on Python 3.14, not from our code.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith.*",
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:chromadb.*",
+    # Third-party (google-genai SDK internals), not from our code.
+    "ignore:Inheritance class AiohttpClientSession:DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true          # count both sides of every if/else, not just lines
+
+[tool.coverage.report]
+fail_under = 88        # line+BRANCH coverage today (app/cli.py, a terminal playground, is the gap); CI fails if it drops
+skip_covered = true
+show_missing = true
+exclude_also = ["if __name__ == .__main__.:"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/W pycodestyle errors, F pyflakes (unused imports, undefined names), B bugbear
+# (likely bugs), S bandit-style security checks, UP modern syntax, I import order.
+select = ["E", "W", "F", "B", "S", "UP", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use assert, fake secrets and hard-coded temp paths.
+# F811: importing pytest fixtures by name looks like a redefinition to pyflakes.
+"tests/**" = ["S101", "S105", "S106", "S108", "S311", "F811"]
+"scripts/**" = ["S311"]
+
+[tool.fastapi]
+entrypoint = "app.main:app"   # used by `fastapi dev` / `fastapi run`

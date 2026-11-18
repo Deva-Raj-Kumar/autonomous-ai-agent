@@ -1,0 +1,135 @@
+# Continuous integration: every push and pull request runs the whole test pyramid.
+# Nothing here needs secrets: tests use a scripted LLM, SQLite, and a throwaway MySQL.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read # least privilege: CI only reads the code
+
+concurrency: # a new push cancels the still-running checks of the previous one
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.14"
+  NODE_VERSION: "26"
+
+jobs:
+  backend:
+    name: Backend (lint, security scans, tests, coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Cache the local embedding model (used by RAG / semantic memory tests)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-v1
+      - run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check app tests scripts alembic
+      - name: Security scan of our code (bandit)
+        run: bandit -r app -q
+      - name: Known vulnerabilities in dependencies (pip-audit)
+        # The four chromadb CVEs affect Chroma's HTTP SERVER mode only; this app embeds
+        # Chroma in-process (see SECURITY.md). Any NEW advisory still fails the build.
+        run: >
+          pip-audit -r requirements.txt --progress-spinner off
+          --ignore-vuln CVE-2026-45829 --ignore-vuln CVE-2026-45830
+          --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833
+      - name: Tests with coverage (unit, integration, security, performance)
+        run: pytest --cov=app --cov-report=term --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: coverage.xml
+
+  mysql:
+    name: Migrations on real MySQL 8
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root # a throwaway CI container, not a real credential
+          MYSQL_DATABASE: ci
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Upgrade, downgrade and upgrade again on MySQL (scratch database)
+        env:
+          RUN_MYSQL_TESTS: "1"
+          MYSQL_TEST_URL: mysql+pymysql://root:root@127.0.0.1:3306/ci
+        run: pytest -m mysql -v
+
+  frontend:
+    name: Frontend (unit tests, coverage, build, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run test:coverage
+      - run: npm run build
+      - name: Known vulnerabilities in dependencies
+        run: npm audit --audit-level=high
+
+  e2e:
+    name: End-to-end (Playwright, real browser)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend] # only worth running when the fast checks pass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: pip install -r requirements.txt
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Run browser tests
+        working-directory: frontend
+        env:
+          E2E_PYTHON: python
+          CI: "true"
+        run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure() # traces + screenshots: replay exactly what the browser saw
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results

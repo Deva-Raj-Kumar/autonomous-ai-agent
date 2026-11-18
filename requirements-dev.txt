@@ -1,0 +1,14 @@
+# Development-only tools (testing, security checks). Not installed in production images.
+# Install with:  pip install -r requirements-dev.txt
+-r requirements.txt
+
+# --- Tests ---
+pytest==9.2.0
+pytest-cov==7.1.0        # coverage measurement (pytest --cov=app)
+coverage==7.17.2
+hypothesis==6.170.15     # property-based tests: generated attack inputs (tests/security)
+
+# --- Static analysis & security scans ---
+ruff==0.17.4             # linter: bugs, unused code, security patterns (ruff check .)
+bandit==1.9.4            # Python security scanner (bandit -r app)
+pip-audit==2.10.1        # dependency vulnerability scan: see SECURITY.md for accepted findings
